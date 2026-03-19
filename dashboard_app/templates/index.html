@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ dashboard.title }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}">
+  <script defer src="{{ url_for('static', path='app.js') }}"></script>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Senior Data Science Prototype</p>
+        <h1>{{ dashboard.title }}</h1>
+        <p class="hero-description">
+          엑셀 `DASHBOARD` 수식 로직을 웹으로 옮기고, raw 시트 업데이트를 바로 반영하도록 구성한 로컬 호스트용 대시보드입니다.
+        </p>
+        <div class="hero-meta">
+          <span>기준일자 {{ dashboard.base_date }}</span>
+          <span>{{ dashboard.source.label }}</span>
+          <span>갱신 {{ dashboard.source.modified_at }}</span>
+        </div>
+      </div>
+
+      <div class="hero-actions panel-surface">
+        <div class="panel-heading">
+          <h2>Source Control</h2>
+          <p>현재 읽는 경로: {{ dashboard.source.path }}</p>
+        </div>
+
+        <form class="stack-form" action="/upload" method="post" enctype="multipart/form-data">
+          <label for="source-files">원본 업로드</label>
+          <input id="source-files" type="file" name="files" multiple required>
+          <p class="form-hint">`.xlsx` 1개 또는 `수신잔고/운용자산.csv` 2개를 업로드하면 최신 원본으로 자동 전환됩니다.</p>
+          <button type="submit">원본 반영</button>
+        </form>
+
+        <form class="stack-form" action="/manual-metrics" method="post">
+          <label>수동 규제 지표 보정</label>
+          <div class="field-grid">
+            <label>
+              <span>모험자본 발행어음(%)</span>
+              <input type="number" step="0.0001" name="venture_capital_issued_note_ratio" value="{{ dashboard.manual_metrics_form.venture_capital_issued_note_ratio }}" required>
+            </label>
+            <label>
+              <span>모험자본 전사 분기(%)</span>
+              <input type="number" step="0.0001" name="venture_capital_company_wide_quarter_ratio" value="{{ dashboard.manual_metrics_form.venture_capital_company_wide_quarter_ratio }}" required>
+            </label>
+            <label>
+              <span>유동성비율 1개월(%)</span>
+              <input type="number" step="0.0001" name="liquidity_ratio_1m" value="{{ dashboard.manual_metrics_form.liquidity_ratio_1m }}" required>
+            </label>
+            <label>
+              <span>유동성비율 3개월(%)</span>
+              <input type="number" step="0.0001" name="liquidity_ratio_3m" value="{{ dashboard.manual_metrics_form.liquidity_ratio_3m }}" required>
+            </label>
+          </div>
+          <p class="form-hint">모험자본/유동성비율은 raw 시트에서 직접 산출되지 않아 로컬 JSON에 저장합니다.</p>
+          <button type="submit">지표 저장</button>
+        </form>
+      </div>
+    </header>
+
+    <section class="summary-grid">
+      {% for card in dashboard.summary_cards %}
+      <article class="summary-card panel-surface">
+        <p class="summary-label">{{ card.label }}</p>
+        <p class="summary-value">{{ card.value }}{% if card.unit %}<span>{{ card.unit }}</span>{% endif %}</p>
+        <p class="summary-detail">{{ card.detail }}</p>
+      </article>
+      {% endfor %}
+    </section>
+
+    <section class="panel-surface">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Compliance</p>
+          <h2>규제비율</h2>
+        </div>
+        <p class="section-note">엑셀 상단 카드와 동일한 지표를 유지하면서, 수동 입력 항목은 바로 수정할 수 있도록 분리했습니다.</p>
+      </div>
+
+      <div class="reg-grid">
+        {% for metric in dashboard.regulatory_metrics %}
+        <article class="reg-card {{ 'is-ok' if metric.status == '충족' else 'is-warn' }}">
+          <p class="reg-title">{{ metric.label }}</p>
+          <p class="reg-value">{{ metric.value_display }}</p>
+          <div class="reg-meta">
+            <span class="reg-badge">{{ metric.status }}</span>
+            <span>{{ metric.rule }}</span>
+          </div>
+          {% if metric.secondary %}
+          <p class="reg-secondary">{{ metric.secondary }}</p>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="split-layout">
+      <article class="panel-surface">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Assets</p>
+            <h2>운용 현황</h2>
+          </div>
+          <p class="section-note">엑셀 수식 재현값과 보정 듀레이션을 함께 표시합니다.</p>
+        </div>
+
+        <div class="table-wrap">
+          <table class="dashboard-table">
+            <thead>
+              <tr>
+                <th>구분</th>
+                <th>말잔(억원)</th>
+                <th>수익률(연)</th>
+                <th>Excel Duration</th>
+                <th>보정 듀레이션</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="table-total">
+                <th>운용자산 총계</th>
+                <td>{{ dashboard.asset_section.display_total_balance }}</td>
+                <td>{{ dashboard.asset_section.display_total_yield }}</td>
+                <td>{{ dashboard.asset_section.display_total_excel_duration }}</td>
+                <td>{{ dashboard.asset_section.display_total_corrected_duration }}</td>
+              </tr>
+              {% for section in dashboard.asset_section.sections %}
+              <tr class="table-group">
+                <th>{{ section.label }}</th>
+                <td>{{ section.display_balance }}</td>
+                <td>{{ section.display_yield }}</td>
+                <td>{{ section.display_excel_duration }}</td>
+                <td>{{ section.display_corrected_duration }}</td>
+              </tr>
+              {% for child in section.children %}
+              <tr>
+                <th class="indent-cell">{{ child.label }}</th>
+                <td>{{ child.display_balance }}</td>
+                <td>{{ child.display_yield }}</td>
+                <td>{{ child.display_excel_duration }}</td>
+                <td>{{ child.display_corrected_duration }}</td>
+              </tr>
+              {% endfor %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="panel-surface">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Funding</p>
+            <h2>수신 현황</h2>
+          </div>
+          <p class="section-note">수시형/약정형 구간별 잔액과 개인·법인 분해, 가중 조달금리를 제공합니다.</p>
+        </div>
+
+        <div class="table-wrap">
+          <table class="dashboard-table">
+            <thead>
+              <tr>
+                <th>구분</th>
+                <th>수신잔액(억원)</th>
+                <th>개인</th>
+                <th>법인</th>
+                <th>조달금리</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="table-total">
+                <th>수신 총계</th>
+                <td>{{ dashboard.deposit_section.display_total_balance }}</td>
+                <td>{{ dashboard.deposit_section.display_personal_total }}</td>
+                <td>{{ dashboard.deposit_section.display_corporate_total }}</td>
+                <td>{{ dashboard.deposit_section.display_total_rate }}</td>
+              </tr>
+              <tr class="table-group">
+                <th>{{ dashboard.deposit_section.demand_row.label }}</th>
+                <td>{{ dashboard.deposit_section.demand_row.display_balance }}</td>
+                <td>{{ dashboard.deposit_section.demand_row.display_personal }}</td>
+                <td>{{ dashboard.deposit_section.demand_row.display_corporate }}</td>
+                <td>{{ dashboard.deposit_section.demand_row.display_rate }}</td>
+              </tr>
+              <tr class="table-group">
+                <th>약정형</th>
+                <td>{{ dashboard.deposit_section.display_term_total_balance }}</td>
+                <td></td>
+                <td></td>
+                <td>{{ dashboard.deposit_section.display_term_total_rate }}</td>
+              </tr>
+              {% for row in dashboard.deposit_section.term_rows %}
+              <tr>
+                <th class="indent-cell">{{ row.label }}</th>
+                <td>{{ row.display_balance }}</td>
+                <td>{{ row.display_personal }}</td>
+                <td>{{ row.display_corporate }}</td>
+                <td>{{ row.display_rate }}</td>
+              </tr>
+              {% endfor %}
+              <tr>
+                <th class="indent-cell">적립형</th>
+                <td>0.0000</td>
+                <td>0.0000</td>
+                <td>0.0000</td>
+                <td>0.00%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <section class="analytics-grid">
+      <article class="panel-surface">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Allocation</p>
+            <h2>운용 비중</h2>
+          </div>
+        </div>
+        <div class="bar-stack">
+          {% for bar in dashboard.mix_bars %}
+          <div class="bar-item">
+            <div class="bar-meta">
+              <span>{{ bar.label }}</span>
+              <span>{{ bar.value_display }}억 / {{ bar.share_display }}</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill" style="width: {{ '%.2f'|format(bar.share * 100) }}%"></div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </article>
+
+      <article class="panel-surface">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Tenor</p>
+            <h2>수신 만기 구조</h2>
+          </div>
+        </div>
+        <div class="bar-stack">
+          {% for bar in dashboard.maturity_bars %}
+          <div class="bar-item">
+            <div class="bar-meta">
+              <span>{{ bar.label }}</span>
+              <span>{{ bar.balance_display }}억</span>
+            </div>
+            <div class="stack-track">
+              <div class="stack-personal" style="width: {{ '%.2f'|format(bar.personal_share * 100) }}%"></div>
+              <div class="stack-corporate" style="width: {{ '%.2f'|format(bar.corporate_share * 100) }}%"></div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </article>
+
+      <article class="panel-surface">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Correction</p>
+            <h2>Duration 보정</h2>
+          </div>
+        </div>
+        <div class="duration-card">
+          <div>
+            <p class="mini-label">엑셀 재현값</p>
+            <p class="duration-value">{{ dashboard.duration_correction.excel_duration_display }}</p>
+          </div>
+          <div>
+            <p class="mini-label">보정 듀레이션</p>
+            <p class="duration-value">{{ dashboard.duration_correction.corrected_duration_display }}</p>
+          </div>
+          <div>
+            <p class="mini-label">차이</p>
+            <p class="duration-value accent">{{ dashboard.duration_correction.gap_display }}</p>
+          </div>
+        </div>
+        <p class="section-note">{{ dashboard.duration_correction.note }}</p>
+      </article>
+
+      <article class="panel-surface">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Data Quality</p>
+            <h2>원본 점검</h2>
+          </div>
+        </div>
+        <div class="quality-grid">
+          <div>
+            <p class="mini-label">수신 detail row</p>
+            <p class="quality-value">{{ dashboard.data_quality.deposit_rows }}</p>
+          </div>
+          <div>
+            <p class="mini-label">운용 detail row</p>
+            <p class="quality-value">{{ dashboard.data_quality.asset_rows }}</p>
+          </div>
+          <div>
+            <p class="mini-label">수신 분류 누락</p>
+            <p class="quality-value">{{ dashboard.data_quality.deposit_missing_filters }}</p>
+          </div>
+          <div>
+            <p class="mini-label">운용 분류 누락</p>
+            <p class="quality-value">{{ dashboard.data_quality.asset_missing_filters }}</p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel-surface">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Raw Preview</p>
+          <h2>원본 데이터 확인</h2>
+        </div>
+        <p class="section-note">업로드 직후 집계가 이상하면 아래 preview에서 원본 컬럼 상태를 바로 확인할 수 있습니다.</p>
+      </div>
+
+      <div class="tab-controls">
+        <button type="button" class="tab-button is-active" data-tab-target="deposits">1. 수신잔고</button>
+        <button type="button" class="tab-button" data-tab-target="assets">2. 운용자산</button>
+      </div>
+
+      <div class="tab-panel is-active" data-tab-panel="deposits">
+        <div class="table-wrap raw-wrap">
+          <table class="dashboard-table raw-table">
+            <thead>
+              <tr>
+                {% for column in dashboard.raw_tables.deposits.columns %}
+                <th>{{ column }}</th>
+                {% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in dashboard.raw_tables.deposits.rows %}
+              <tr>
+                {% for value in row %}
+                <td>{{ value }}</td>
+                {% endfor %}
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="tab-panel" data-tab-panel="assets">
+        <div class="table-wrap raw-wrap">
+          <table class="dashboard-table raw-table">
+            <thead>
+              <tr>
+                {% for column in dashboard.raw_tables.assets.columns %}
+                <th>{{ column }}</th>
+                {% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in dashboard.raw_tables.assets.rows %}
+              <tr>
+                {% for value in row %}
+                <td>{{ value }}</td>
+                {% endfor %}
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
