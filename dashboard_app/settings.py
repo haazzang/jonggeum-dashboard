@@ -14,6 +14,12 @@ WORKBOOK_SHEETS = {
     "dashboard": ("DASHBOARD",),
     "deposits": ("1. 수신잔고", "1.수신잔고"),
     "assets": ("2. 운용자산", "2.운용자산"),
+    "daily_trend": (
+        "3. 일별잔고추이",
+        "3. 일별 잔고 추이",
+        "3.일별잔고추이",
+        "3.일별 잔고 추이",
+    ),
 }
 
 DEFAULT_MANUAL_METRICS = {

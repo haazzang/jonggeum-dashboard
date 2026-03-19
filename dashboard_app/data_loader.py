@@ -40,6 +40,7 @@ class SourceBundle:
 class RawDataset:
     deposits: pd.DataFrame
     assets: pd.DataFrame
+    daily_trend: pd.DataFrame
     source: SourceBundle
     base_date: datetime | None
     dashboard_seed_metrics: dict[str, float]
@@ -62,16 +63,18 @@ def load_workbook_dataset(workbook_path: Path) -> RawDataset:
 
 def load_raw_dataset_from_source(source: SourceBundle) -> RawDataset:
     if source.kind == "workbook":
-        deposits, assets, base_date, seed_metrics = _load_from_workbook(source.workbook_path)
+        deposits, assets, daily_trend, base_date, seed_metrics = _load_from_workbook(source.workbook_path)
     else:
         deposits = _read_csv_sheet(source.deposits_csv_path, "deposits")
         assets = _read_csv_sheet(source.assets_csv_path, "assets")
+        daily_trend = pd.DataFrame()
         base_date = _extract_base_date(deposits)
         seed_metrics = dict(DEFAULT_MANUAL_METRICS)
 
     return RawDataset(
         deposits=_normalize_deposits_frame(deposits),
         assets=_normalize_assets_frame(assets),
+        daily_trend=daily_trend,
         source=source,
         base_date=base_date,
         dashboard_seed_metrics=seed_metrics,
@@ -151,7 +154,9 @@ def _find_csv_pair(directory: Path) -> tuple[Path, Path] | None:
     return None
 
 
-def _load_from_workbook(workbook_path: Path | None) -> tuple[pd.DataFrame, pd.DataFrame, datetime | None, dict[str, float]]:
+def _load_from_workbook(
+    workbook_path: Path | None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, datetime | None, dict[str, float]]:
     if workbook_path is None:
         raise FileNotFoundError("엑셀 경로가 없습니다.")
 
@@ -159,9 +164,13 @@ def _load_from_workbook(workbook_path: Path | None) -> tuple[pd.DataFrame, pd.Da
     deposits_sheet = _find_sheet(workbook, WORKBOOK_SHEETS["deposits"])
     assets_sheet = _find_sheet(workbook, WORKBOOK_SHEETS["assets"])
     dashboard_sheet = _find_sheet(workbook, WORKBOOK_SHEETS["dashboard"], required=False)
+    daily_trend_sheet = _find_sheet(workbook, WORKBOOK_SHEETS["daily_trend"], required=False)
 
     deposits = _worksheet_to_frame(deposits_sheet, header_row=4, data_start_row=6)
     assets = _worksheet_to_frame(assets_sheet, header_row=4, data_start_row=5)
+    daily_trend = (
+        _parse_daily_trend_sheet(daily_trend_sheet) if daily_trend_sheet is not None else pd.DataFrame()
+    )
 
     base_date = None
     seed_metrics = dict(DEFAULT_MANUAL_METRICS)
@@ -177,7 +186,7 @@ def _load_from_workbook(workbook_path: Path | None) -> tuple[pd.DataFrame, pd.Da
     if base_date is None:
         base_date = _extract_base_date(deposits)
 
-    return deposits, assets, base_date, seed_metrics
+    return deposits, assets, daily_trend, base_date, seed_metrics
 
 
 def _find_sheet(workbook, candidates: tuple[str, ...], required: bool = True):
@@ -196,6 +205,86 @@ def _worksheet_to_frame(worksheet, header_row: int, data_start_row: int) -> pd.D
     headers = _deduplicate_headers(rows[header_index])
     frame = pd.DataFrame(rows[data_index:], columns=headers)
     return frame.dropna(how="all").reset_index(drop=True)
+
+
+def _parse_daily_trend_sheet(worksheet) -> pd.DataFrame:
+    rows = list(worksheet.values)
+    header_index = _find_daily_trend_header_index(rows)
+    if header_index is None:
+        return pd.DataFrame()
+
+    header_row = list(rows[header_index])
+    date_columns: list[int] = []
+    date_labels: list[str] = []
+    for column_index, value in enumerate(header_row[5:], start=5):
+        parsed = pd.to_datetime(value, errors="coerce")
+        if pd.isna(parsed):
+            if date_columns:
+                break
+            continue
+        date_columns.append(column_index)
+        date_labels.append(parsed.strftime("%Y-%m-%d"))
+
+    if not date_columns:
+        return pd.DataFrame()
+
+    current_labels: list[str | None] = [None, None, None, None]
+    records: list[dict[str, object]] = []
+    for row in rows[header_index + 1 :]:
+        row_values = list(row)
+        label_cells = [row_values[index] if index < len(row_values) else None for index in range(1, 5)]
+        if not any(_clean_trend_label(value) for value in label_cells):
+            continue
+
+        for level, value in enumerate(label_cells):
+            cleaned = _clean_trend_label(value)
+            if cleaned:
+                current_labels[level] = cleaned
+                for clear_index in range(level + 1, len(current_labels)):
+                    current_labels[clear_index] = None
+
+        numeric_values = [
+            _coerce_trend_number(row_values[index] if index < len(row_values) else None)
+            for index in date_columns
+        ]
+        if not any(value is not None for value in numeric_values):
+            continue
+
+        active_labels = [label for label in current_labels if label]
+        if not active_labels:
+            continue
+
+        series_path = " > ".join(active_labels)
+        record: dict[str, object] = {
+            "series_key": series_path,
+            "series_label": active_labels[-1],
+            "series_path": series_path,
+            "level_1": current_labels[0] or "",
+            "level_2": current_labels[1] or "",
+            "level_3": current_labels[2] or "",
+            "level_4": current_labels[3] or "",
+            "depth": len(active_labels),
+        }
+        for date_label, value in zip(date_labels, numeric_values):
+            record[date_label] = value
+        records.append(record)
+
+    return pd.DataFrame(records)
+
+
+def _find_daily_trend_header_index(rows: list[tuple[object, ...]]) -> int | None:
+    for index, row in enumerate(rows[:10]):
+        first_columns = {str(value).strip() for value in row[:5] if value is not None}
+        if "구분" not in first_columns:
+            continue
+
+        date_hits = 0
+        for value in row[5:15]:
+            if not pd.isna(pd.to_datetime(value, errors="coerce")):
+                date_hits += 1
+        if date_hits >= 2:
+            return index
+    return None
 
 
 def _read_csv_sheet(csv_path: Path | None, dataset_kind: str) -> pd.DataFrame:
@@ -232,6 +321,23 @@ def _detect_header_row(raw: pd.DataFrame, keywords: tuple[str, str]) -> int:
         if all(keyword in row_text for keyword in keywords):
             return idx
     raise ValueError(f"CSV 헤더 행을 찾을 수 없습니다. 필요 키워드: {keywords}")
+
+
+def _clean_trend_label(value) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _coerce_trend_number(value) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _deduplicate_headers(headers) -> list[str]:

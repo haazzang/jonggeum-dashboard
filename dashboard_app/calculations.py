@@ -45,6 +45,7 @@ def build_dashboard(raw_dataset: RawDataset, manual_metrics: ManualMetrics) -> d
         assets,
         columns=("편입일자", "만기일자", "자산명", "필터", "BS금액", "운용금리(%)", "듀레이션"),
     )
+    trend_chart = _build_trend_chart(raw_dataset.daily_trend, raw_dataset.base_date)
 
     data_quality = {
         "deposit_rows": len(deposit_details),
@@ -55,6 +56,8 @@ def build_dashboard(raw_dataset: RawDataset, manual_metrics: ManualMetrics) -> d
         "asset_missing_filters": int(assets["dashboard_filter"].isna().sum()),
         "deposit_missing_balance": int(deposit_details["dashboard_balance"].isna().sum()),
         "asset_missing_balance": int(assets["dashboard_balance"].isna().sum()),
+        "trend_series": trend_chart["series_count"],
+        "trend_days": trend_chart["date_count"],
     }
 
     return {
@@ -112,6 +115,7 @@ def build_dashboard(raw_dataset: RawDataset, manual_metrics: ManualMetrics) -> d
             "gap_display": _format_number(total_assets_excel_duration - total_assets_corrected_duration),
             "note": "원본 엑셀 Duration 수식은 운용금리를 다시 참조합니다. 보정 듀레이션은 raw 시트의 듀레이션 컬럼으로 재계산했습니다.",
         },
+        "trend_chart": trend_chart,
         "mix_bars": _build_mix_bars(asset_sections),
         "maturity_bars": _build_maturity_bars(deposit_section),
         "data_quality": data_quality,
@@ -343,6 +347,115 @@ def _build_mix_bars(asset_sections: dict[str, Any]) -> list[dict[str, Any]]:
     return bars
 
 
+def _build_trend_chart(daily_trend: pd.DataFrame, base_date: datetime | None = None) -> dict[str, Any]:
+    if daily_trend.empty:
+        return {
+            "available": False,
+            "message": "업로드한 원본에 `3. 일별잔고추이` 시트가 없어서 차트를 표시하지 않습니다.",
+            "labels": [],
+            "series": {},
+            "series_order": [],
+            "featured_keys": [],
+            "default_key": None,
+            "date_count": 0,
+            "series_count": 0,
+            "period_label": "-",
+        }
+
+    date_columns = [column for column in daily_trend.columns if _is_trend_date_column(column)]
+    date_columns = _trim_trend_date_columns(daily_trend, date_columns, base_date)
+    if not date_columns:
+        return {
+            "available": False,
+            "message": "`3. 일별잔고추이` 시트에서 날짜 컬럼을 찾지 못했습니다.",
+            "labels": [],
+            "series": {},
+            "series_order": [],
+            "featured_keys": [],
+            "default_key": None,
+            "date_count": 0,
+            "series_count": 0,
+            "period_label": "-",
+        }
+
+    series: dict[str, dict[str, Any]] = {}
+    series_order: list[dict[str, Any]] = []
+    for record in daily_trend.to_dict("records"):
+        key = str(record.get("series_key") or "").strip()
+        if not key:
+            continue
+
+        values = [_to_eok_amount(record.get(date_column)) for date_column in date_columns]
+        if not any(value is not None for value in values):
+            continue
+
+        path = str(record.get("series_path") or key)
+        label = str(record.get("series_label") or path)
+        depth = int(record.get("depth") or 1)
+        group = str(record.get("level_1") or label)
+        item = {
+            "key": key,
+            "label": label,
+            "path": path,
+            "group": group,
+            "depth": depth,
+            "values": values,
+        }
+        series[key] = item
+        series_order.append(
+            {
+                "key": key,
+                "label": label,
+                "path": path,
+                "group": group,
+                "depth": depth,
+            }
+        )
+
+    if not series_order:
+        return {
+            "available": False,
+            "message": "`3. 일별잔고추이` 시트에 차트로 그릴 수 있는 값이 없습니다.",
+            "labels": [],
+            "series": {},
+            "series_order": [],
+            "featured_keys": [],
+            "default_key": None,
+            "date_count": 0,
+            "series_count": 0,
+            "period_label": "-",
+        }
+
+    featured_candidates = (
+        "수신잔고",
+        "운용자산",
+        "운용자산 > 유동성자산",
+        "운용자산 > 기업금융관련자산",
+        "운용자산 > 부동산관련자산",
+        "운용자산 > 기타자산",
+        "수신잔고 > 수시형",
+        "수신잔고 > 약정형",
+    )
+    featured_keys = [candidate for candidate in featured_candidates if candidate in series]
+    if not featured_keys:
+        featured_keys = [item["key"] for item in series_order[:6]]
+
+    default_key = "수신잔고" if "수신잔고" in series else featured_keys[0]
+
+    return {
+        "available": True,
+        "message": None,
+        "labels": date_columns,
+        "series": series,
+        "series_order": series_order,
+        "featured_keys": featured_keys,
+        "default_key": default_key,
+        "date_count": len(date_columns),
+        "series_count": len(series_order),
+        "period_label": f"{date_columns[0]} ~ {date_columns[-1]}",
+    }
+
+
 def _build_maturity_bars(deposit_section: dict[str, Any]) -> list[dict[str, Any]]:
     total = deposit_section["total_balance"] or 1.0
     bars = []
@@ -368,6 +481,43 @@ def _preview_table(dataframe: pd.DataFrame, columns: tuple[str, ...]) -> dict[st
     for _, row in preview_frame.iterrows():
         preview_records.append([_preview_value(row[column]) for column in preview_columns])
     return {"columns": preview_columns, "rows": preview_records}
+
+
+def _is_trend_date_column(value: object) -> bool:
+    try:
+        datetime.strptime(str(value), "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
+def _trim_trend_date_columns(
+    daily_trend: pd.DataFrame,
+    date_columns: list[str],
+    base_date: datetime | None,
+) -> list[str]:
+    if not date_columns:
+        return date_columns
+
+    if base_date is not None:
+        cutoff = base_date.strftime("%Y-%m-%d")
+        trimmed = [column for column in date_columns if column <= cutoff]
+        if trimmed:
+            date_columns = trimmed
+
+    last_signal_index = len(date_columns) - 1
+    for index in range(len(date_columns) - 1, -1, -1):
+        series = pd.to_numeric(daily_trend[date_columns[index]], errors="coerce").fillna(0.0)
+        if float(series.abs().sum()) > 0:
+            last_signal_index = index
+            break
+    return date_columns[: last_signal_index + 1]
+
+
+def _to_eok_amount(value) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    return float(value) / UNIT_EOK
 
 
 def _weighted_average(values, weights, divisor: float = 1.0) -> float:
