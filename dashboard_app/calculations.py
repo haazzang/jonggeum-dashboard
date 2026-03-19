@@ -7,7 +7,7 @@ import pandas as pd
 
 from dashboard_app.data_loader import RawDataset
 from dashboard_app.manual_metrics import ManualMetrics
-from dashboard_app.settings import ASSET_GROUPS, DEPOSIT_BUCKETS, OTHER_EXPENSE_RATE, UNIT_EOK
+from dashboard_app.settings import ASSET_GROUPS, ASSET_VERSION, DEPOSIT_BUCKETS, OTHER_EXPENSE_RATE, UNIT_EOK
 
 
 def build_dashboard(raw_dataset: RawDataset, manual_metrics: ManualMetrics) -> dict[str, Any]:
@@ -62,6 +62,7 @@ def build_dashboard(raw_dataset: RawDataset, manual_metrics: ManualMetrics) -> d
 
     return {
         "title": "종금 영업 대시보드",
+        "asset_version": ASSET_VERSION,
         "base_date": base_date,
         "source": {
             "label": source.label,

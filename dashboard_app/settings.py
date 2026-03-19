@@ -6,6 +6,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT_DIR / "data"
 INPUT_DIR = DATA_DIR / "input"
 MANUAL_METRICS_PATH = DATA_DIR / "manual_metrics.json"
+ASSET_VERSION = "20260319-trend-chart-2"
 
 UNIT_EOK = 100_000_000
 OTHER_EXPENSE_RATE = 0.002
